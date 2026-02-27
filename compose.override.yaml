@@ -1,0 +1,14 @@
+services:
+  bot:
+    build:
+      target: deps
+    command: ["pnpm", "dev"]
+    volumes:
+      - ./src:/app/src
+      - ./tsconfig.json:/app/tsconfig.json
+    environment:
+      NODE_ENV: development
+
+  mongo:
+    ports:
+      - "27017:27017"
