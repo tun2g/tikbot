@@ -1,5 +1,5 @@
 import { WatchedUser } from '@/db/models/index.js';
-import { ConnectionManager } from '@/tiktok/connection-manager.js';
+import { ConnectionManager } from '@/pkgs/tiktok/connection-manager.js';
 import { logger } from '@/utils/logger.js';
 
 export class TikTokService {

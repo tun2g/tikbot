@@ -2,6 +2,7 @@ import { type WebcastEnvelopeMessage, EnvelopeDisplay } from 'tiktok-live-connec
 import { EnvelopeEvent } from '@/db/models/index.js';
 import { NotificationService } from '@/services/notification.service.js';
 import { formatEnvelopeNotification, formatEnvelopeReminder } from '@/utils/format.js';
+import { ClaimService } from '@/pkgs/adb/claim.service.js';
 import { logger } from '@/utils/logger.js';
 import { env } from '@/config/env.js';
 
@@ -13,7 +14,10 @@ interface PendingReminder {
 export class EnvelopeHandler {
   private readonly pendingReminders = new Map<string, PendingReminder>();
 
-  constructor(private readonly notifications: NotificationService) {}
+  constructor(
+    private readonly notifications: NotificationService,
+    private readonly claimService: ClaimService,
+  ) {}
 
   async handle(username: string, data: WebcastEnvelopeMessage): Promise<void> {
     if (data.display !== EnvelopeDisplay.ENVELOPE_DISPLAY_NEW) return;
@@ -63,6 +67,13 @@ export class EnvelopeHandler {
     if (unpackAt && messageId) {
       this.scheduleReminder(envelopeId, username, diamondCount, unpackAt, messageId);
     }
+
+    // Schedule ADB auto-claim
+    if (unpackAt) {
+      this.claimService.scheduleClaim({ envelopeId, username, diamondCount, unpackAt }).catch((err) => {
+        logger.error({ err, envelopeId }, 'Failed to schedule claim');
+      });
+    }
   }
 
   private scheduleReminder(
@@ -109,5 +120,6 @@ export class EnvelopeHandler {
       clearTimeout(timer);
     }
     this.pendingReminders.clear();
+    this.claimService.clearAll();
   }
 }

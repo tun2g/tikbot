@@ -4,3 +4,4 @@ export { watchCommand } from './watch.js';
 export { unwatchCommand } from './unwatch.js';
 export { listCommand } from './list.js';
 export { statusCommand } from './status.js';
+export { deviceCommand, deviceTapCommand, deviceScreenshotCommand } from './device.js';

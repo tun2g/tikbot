@@ -1,7 +1,8 @@
 import { TikTokLiveConnection, WebcastEvent, ControlEvent, type ControlAction } from 'tiktok-live-connector';
 import { WatchedUser } from '@/db/models/index.js';
 import { NotificationService } from '@/services/notification.service.js';
-import { EnvelopeHandler } from '@/tiktok/envelope-handler.js';
+import { ClaimService } from '@/pkgs/adb/claim.service.js';
+import { EnvelopeHandler } from '@/pkgs/tiktok/envelope-handler.js';
 import { logger } from '@/utils/logger.js';
 import { env } from '@/config/env.js';
 
@@ -19,8 +20,8 @@ export class ConnectionManager {
   private pollTimer?: ReturnType<typeof setInterval>;
   private readonly envelopeHandler: EnvelopeHandler;
 
-  constructor(notifications: NotificationService) {
-    this.envelopeHandler = new EnvelopeHandler(notifications);
+  constructor(notifications: NotificationService, claimService: ClaimService) {
+    this.envelopeHandler = new EnvelopeHandler(notifications, claimService);
   }
 
   get connectionCount(): number {

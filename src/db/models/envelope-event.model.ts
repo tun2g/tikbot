@@ -10,6 +10,11 @@ const envelopeEventSchema = new Schema({
   peopleCount: { type: Number, default: 0 },
   unpackAt: { type: Date },
   timestamp: { type: Date, default: Date.now },
+
+  // ADB auto-claim tracking
+  claimAttempted: { type: Boolean, default: false },
+  claimSuccess: { type: Boolean, default: false },
+  claimError: { type: String, default: '' },
 });
 
 export type IEnvelopeEvent = InferSchemaType<typeof envelopeEventSchema>;

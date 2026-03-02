@@ -72,3 +72,47 @@ export function formatUserNotFound(username: string): string {
 export function formatAlreadyWatching(username: string): string {
   return `⚠️ <b>@${esc(username)}</b> is already being watched.`;
 }
+
+export function formatClaimScheduled(username: string, opensInSeconds: number): string {
+  return [
+    `🤖 <b>Auto-claim scheduled</b>`,
+    ``,
+    `📺 Streamer: <b>@${esc(username)}</b>`,
+    `⏳ Claiming in: <b>${formatDuration(opensInSeconds)}</b>`,
+  ].join('\n');
+}
+
+export function formatClaimSuccess(username: string, diamondCount: number): string {
+  return [
+    `✅ <b>Treasure Box Claimed!</b>`,
+    ``,
+    `📺 Streamer: <b>@${esc(username)}</b>`,
+    `💎 Coins: <b>${diamondCount.toLocaleString()}</b>`,
+  ].join('\n');
+}
+
+export function formatClaimFailure(username: string, error: string): string {
+  return [
+    `❌ <b>Auto-claim Failed</b>`,
+    ``,
+    `📺 Streamer: <b>@${esc(username)}</b>`,
+    `⚠️ Error: <code>${esc(error)}</code>`,
+  ].join('\n');
+}
+
+export function formatDeviceStatus(
+  connected: boolean,
+  deviceId: string,
+  currentApp: string,
+  tapX: number,
+  tapY: number,
+): string {
+  return [
+    `📱 <b>ADB Device Status</b>`,
+    ``,
+    `🔌 Connected: ${connected ? '✅ Yes' : '❌ No'}`,
+    `📟 Device: <code>${esc(deviceId)}</code>`,
+    `📲 Current app: <code>${esc(currentApp)}</code>`,
+    `🎯 Tap coordinates: <b>(${tapX}, ${tapY})</b>`,
+  ].join('\n');
+}
