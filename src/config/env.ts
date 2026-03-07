@@ -15,18 +15,23 @@ export const env = {
   TREASURE_BOX_ALERT_BEFORE_MS: Number(process.env['TREASURE_BOX_ALERT_BEFORE_MS'] ?? 60_000),
   LOG_LEVEL: process.env['LOG_LEVEL'] ?? 'info',
 
-  // ADB auto-claim
-  ADB_ENABLED: parseBool(process.env['ADB_ENABLED']),
-  ADB_DEVICE_ID: process.env['ADB_DEVICE_ID'] ?? '',
-  ADB_TAP_X: Number(process.env['ADB_TAP_X'] ?? 0),
-  ADB_TAP_Y: Number(process.env['ADB_TAP_Y'] ?? 0),
-  ADB_PRE_CLAIM_MS: Number(process.env['ADB_PRE_CLAIM_MS'] ?? 10_000),
-  ADB_NAV_DELAY_MS: Number(process.env['ADB_NAV_DELAY_MS'] ?? 3_000),
-  ADB_CLAIM_OFFSET_MS: Number(process.env['ADB_CLAIM_OFFSET_MS'] ?? 200),
+  // Device auto-claim
+  DEVICE_ENABLED: parseBool(process.env['DEVICE_ENABLED']),
+  DEVICE_TYPE: (process.env['DEVICE_TYPE'] ?? 'adb') as 'adb' | 'wda',
+  DEVICE_ID: process.env['DEVICE_ID'] ?? '',
+  DEVICE_TAP_X: Number(process.env['DEVICE_TAP_X'] ?? 0),
+  DEVICE_TAP_Y: Number(process.env['DEVICE_TAP_Y'] ?? 0),
+  DEVICE_OPEN_X: Number(process.env['DEVICE_OPEN_X'] ?? 0),
+  DEVICE_OPEN_Y: Number(process.env['DEVICE_OPEN_Y'] ?? 0),
+  DEVICE_OPEN_DELAY_MS: Number(process.env['DEVICE_OPEN_DELAY_MS'] ?? 1_000),
+  DEVICE_PRE_CLAIM_MS: Number(process.env['DEVICE_PRE_CLAIM_MS'] ?? 10_000),
+  DEVICE_NAV_DELAY_MS: Number(process.env['DEVICE_NAV_DELAY_MS'] ?? 3_000),
+  DEVICE_CLAIM_OFFSET_MS: Number(process.env['DEVICE_CLAIM_OFFSET_MS'] ?? 200),
+  DEVICE_WDA_URL: process.env['DEVICE_WDA_URL'] ?? 'http://localhost:8100',
 };
 
-// Startup validation: disable ADB if tap coordinates are not configured
-if (env.ADB_ENABLED && env.ADB_TAP_X === 0 && env.ADB_TAP_Y === 0) {
-  console.warn('ADB_ENABLED is true but ADB_TAP_X and ADB_TAP_Y are both 0 — disabling ADB auto-claim');
-  env.ADB_ENABLED = false;
+// Startup validation: disable device if tap coordinates are not configured
+if (env.DEVICE_ENABLED && env.DEVICE_TAP_X === 0 && env.DEVICE_TAP_Y === 0) {
+  console.warn('DEVICE_ENABLED is true but DEVICE_TAP_X and DEVICE_TAP_Y are both 0 — disabling auto-claim');
+  env.DEVICE_ENABLED = false;
 }

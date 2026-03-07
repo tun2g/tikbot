@@ -1,7 +1,8 @@
 import type { Context } from 'telegraf';
 import type { TikTokService } from '@/services/tiktok.service.js';
 import type { ConnectionManager } from '@/pkgs/tiktok/connection-manager.js';
-import type { ClaimService } from '@/pkgs/adb/claim.service.js';
+import type { ClaimService } from '@/services/claim.service.js';
+import type { DeviceDriver } from '@/pkgs/device/types.js';
 
 export interface UserSession {
   userId: number;
@@ -15,6 +16,7 @@ export interface BotContext extends Context {
   tiktokService: TikTokService;
   connectionManager: ConnectionManager;
   claimService: ClaimService;
+  deviceDriver: DeviceDriver;
   session?: UserSession;
   requestId: string;
 }

@@ -108,7 +108,7 @@ export function formatDeviceStatus(
   tapY: number,
 ): string {
   return [
-    `📱 <b>ADB Device Status</b>`,
+    `📱 <b>Device Status</b>`,
     ``,
     `🔌 Connected: ${connected ? '✅ Yes' : '❌ No'}`,
     `📟 Device: <code>${esc(deviceId)}</code>`,

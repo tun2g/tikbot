@@ -1,4 +1,4 @@
-import * as adb from '@/pkgs/adb/adb.js';
+import type { DeviceDriver } from '@/pkgs/device/types.js';
 import { env } from '@/config/env.js';
 import { EnvelopeEvent } from '@/db/models/index.js';
 import { NotificationService } from '@/services/notification.service.js';
@@ -38,30 +38,35 @@ const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout
 
 export class ClaimService {
   private readonly jobs = new Map<string, ClaimJob>();
+  private readonly queue: ClaimJob[] = [];
+  private processing = false;
 
-  constructor(private readonly notifications: NotificationService) {}
+  constructor(
+    private readonly notifications: NotificationService,
+    private readonly device: DeviceDriver,
+  ) {}
 
   // -------------------------------------------------------------------------
   // Public API
   // -------------------------------------------------------------------------
 
   async initialize(): Promise<void> {
-    if (!env.ADB_ENABLED) {
-      logger.info('ADB auto-claim disabled');
+    if (!env.DEVICE_ENABLED) {
+      logger.info('Device auto-claim disabled');
       return;
     }
 
-    const connected = await adb.isConnected();
+    const connected = await this.device.isConnected();
 
     if (connected) {
-      logger.info('ADB device connected, auto-claim ready');
+      logger.info('Device connected, auto-claim ready');
     } else {
-      logger.warn('ADB enabled but no device connected');
+      logger.warn('Device enabled but no device connected');
     }
   }
 
   async scheduleClaim(input: ClaimInput): Promise<void> {
-    if (!env.ADB_ENABLED) return;
+    if (!env.DEVICE_ENABLED) return;
 
     const { envelopeId, username, diamondCount, unpackAt } = input;
 
@@ -71,44 +76,24 @@ export class ClaimService {
     const job: ClaimJob = { envelopeId, username, diamondCount, unpackAt };
 
     const now = Date.now();
-    const navTime = unpackAt.getTime() - env.ADB_PRE_CLAIM_MS;
-    const navDelay = navTime - now;
-    const claimDelay = unpackAt.getTime() - env.ADB_CLAIM_OFFSET_MS - now;
 
-    // --- Navigation timer ---------------------------------------------------
-    if (navDelay <= 0) {
-      // Navigate immediately (fire-and-forget; errors logged internally)
+    // Navigate early so TikTok live + treasure box UI has time to load
+    const navDelay = Math.max(0, unpackAt.getTime() - env.DEVICE_PRE_CLAIM_MS - now);
+    job.navTimer = setTimeout(() => {
       this.navigateToLive(username).catch((err) => {
         logger.error({ err, envelopeId }, 'Failed to navigate to live');
       });
-    } else {
-      job.navTimer = setTimeout(() => {
-        this.navigateToLive(username).catch((err) => {
-          logger.error({ err, envelopeId }, 'Failed to navigate to live');
-        });
-      }, navDelay);
-    }
+    }, navDelay);
 
-    // --- Claim timer --------------------------------------------------------
-    if (claimDelay <= 0) {
-      // Both nav and claim are immediate — use setTimeout(0) so nav fires first
-      job.claimTimer = setTimeout(() => {
-        this.performClaim(job).catch((err) => {
-          logger.error({ err, envelopeId }, 'Unhandled error in performClaim');
-        });
-      }, 0);
-    } else {
-      job.claimTimer = setTimeout(() => {
-        this.performClaim(job).catch((err) => {
-          logger.error({ err, envelopeId }, 'Unhandled error in performClaim');
-        });
-      }, claimDelay);
-    }
+    // Schedule claim taps at unpackAt (when the box is actually openable)
+    const claimDelay = Math.max(0, unpackAt.getTime() - now);
+    job.claimTimer = setTimeout(() => {
+      this.enqueue(job);
+    }, claimDelay);
 
-    // Store the job
     this.jobs.set(envelopeId, job);
 
-    const opensInSeconds = Math.max(0, Math.round((unpackAt.getTime() - Date.now()) / 1000));
+    const opensInSeconds = Math.max(0, Math.round(claimDelay / 1000));
 
     logger.info(
       {
@@ -116,7 +101,6 @@ export class ClaimService {
         username,
         diamondCount,
         unpackAt: unpackAt.toISOString(),
-        navDelay: Math.round(navDelay),
         claimDelay: Math.round(claimDelay),
         opensInSeconds,
       },
@@ -134,7 +118,39 @@ export class ClaimService {
       if (job.claimTimer) clearTimeout(job.claimTimer);
     }
     this.jobs.clear();
+    this.queue.length = 0;
     logger.info('Cleared all claim jobs');
+  }
+
+  // -------------------------------------------------------------------------
+  // Queue — process claims one at a time
+  // -------------------------------------------------------------------------
+
+  private enqueue(job: ClaimJob): void {
+    // Insert sorted by unpackAt (earliest first)
+    const insertIdx = this.queue.findIndex((j) => j.unpackAt.getTime() > job.unpackAt.getTime());
+    if (insertIdx === -1) {
+      this.queue.push(job);
+    } else {
+      this.queue.splice(insertIdx, 0, job);
+    }
+
+    if (!this.processing) {
+      this.processQueue().catch((err) => {
+        logger.error({ err }, 'Unhandled error in claim queue');
+      });
+    }
+  }
+
+  private async processQueue(): Promise<void> {
+    this.processing = true;
+
+    while (this.queue.length > 0) {
+      const job = this.queue.shift()!;
+      await this.performClaim(job);
+    }
+
+    this.processing = false;
   }
 
   // -------------------------------------------------------------------------
@@ -143,8 +159,8 @@ export class ClaimService {
 
   private async navigateToLive(username: string): Promise<void> {
     const url = `https://www.tiktok.com/@${username}/live`;
-    await adb.openUrl(url);
-    await sleep(env.ADB_NAV_DELAY_MS);
+    await this.device.openUrl(url);
+    await sleep(env.DEVICE_NAV_DELAY_MS);
     logger.info({ username, url }, 'Navigated to live');
   }
 
@@ -152,13 +168,19 @@ export class ClaimService {
     const { envelopeId, username, diamondCount } = job;
 
     try {
-      const connected = await adb.isConnected();
+      const connected = await this.device.isConnected();
       if (!connected) {
         throw new Error('Device not connected');
       }
 
-      await adb.tap(env.ADB_TAP_X, env.ADB_TAP_Y);
-      logger.info({ envelopeId, username, x: env.ADB_TAP_X, y: env.ADB_TAP_Y }, 'Claim tap sent');
+      // Step 1: Tap the treasure box icon to open the popup
+      await this.device.tap(env.DEVICE_TAP_X, env.DEVICE_TAP_Y);
+      logger.info({ envelopeId, username, x: env.DEVICE_TAP_X, y: env.DEVICE_TAP_Y }, 'Treasure box tap sent');
+
+      // Step 2: Wait for popup to appear, then tap "Open"
+      await sleep(env.DEVICE_OPEN_DELAY_MS);
+      await this.device.tap(env.DEVICE_OPEN_X, env.DEVICE_OPEN_Y);
+      logger.info({ envelopeId, username, x: env.DEVICE_OPEN_X, y: env.DEVICE_OPEN_Y }, 'Open button tap sent');
 
       await EnvelopeEvent.updateOne({ envelopeId }, { $set: { claimAttempted: true, claimSuccess: true } });
 

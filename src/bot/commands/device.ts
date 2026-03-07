@@ -1,28 +1,28 @@
 import { Composer } from 'telegraf';
 import type { BotContext } from '@/types/index.js';
-import * as adb from '@/pkgs/adb/adb.js';
 import { env } from '@/config/env.js';
 import { formatDeviceStatus } from '@/utils/format.js';
 
 // ---------------------------------------------------------------------------
-// /device — show ADB device status
+// /device — show device status
 // ---------------------------------------------------------------------------
 
 export const deviceCommand = new Composer<BotContext>();
 
 deviceCommand.command('device', async (ctx) => {
-  const connected = await adb.isConnected();
+  const driver = ctx.deviceDriver;
+  const connected = await driver.isConnected();
 
   let currentApp = 'unknown';
   if (connected) {
     try {
-      currentApp = await adb.currentApp();
+      currentApp = await driver.currentApp();
     } catch {
       currentApp = 'unknown';
     }
   }
 
-  const { ADB_DEVICE_ID: deviceId, ADB_TAP_X: tapX, ADB_TAP_Y: tapY } = env;
+  const { DEVICE_ID: deviceId, DEVICE_TAP_X: tapX, DEVICE_TAP_Y: tapY } = env;
 
   await ctx.reply(formatDeviceStatus(connected, deviceId, currentApp, tapX, tapY), { parse_mode: 'HTML' });
 });
@@ -34,18 +34,19 @@ deviceCommand.command('device', async (ctx) => {
 export const deviceTapCommand = new Composer<BotContext>();
 
 deviceTapCommand.command('device_tap', async (ctx) => {
-  const connected = await adb.isConnected();
+  const driver = ctx.deviceDriver;
+  const connected = await driver.isConnected();
   if (!connected) {
-    await ctx.reply('❌ No device connected', { parse_mode: 'HTML' });
+    await ctx.reply('No device connected', { parse_mode: 'HTML' });
     return;
   }
 
   try {
-    await adb.tap(env.ADB_TAP_X, env.ADB_TAP_Y);
-    await ctx.reply(`✅ Tapped at (<b>${env.ADB_TAP_X}</b>, <b>${env.ADB_TAP_Y}</b>)`, { parse_mode: 'HTML' });
+    await driver.tap(env.DEVICE_TAP_X, env.DEVICE_TAP_Y);
+    await ctx.reply(`Tapped at (<b>${env.DEVICE_TAP_X}</b>, <b>${env.DEVICE_TAP_Y}</b>)`, { parse_mode: 'HTML' });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    await ctx.reply(`❌ Tap failed: <code>${message}</code>`, { parse_mode: 'HTML' });
+    await ctx.reply(`Tap failed: <code>${message}</code>`, { parse_mode: 'HTML' });
   }
 });
 
@@ -56,17 +57,18 @@ deviceTapCommand.command('device_tap', async (ctx) => {
 export const deviceScreenshotCommand = new Composer<BotContext>();
 
 deviceScreenshotCommand.command('device_screenshot', async (ctx) => {
-  const connected = await adb.isConnected();
+  const driver = ctx.deviceDriver;
+  const connected = await driver.isConnected();
   if (!connected) {
-    await ctx.reply('❌ No device connected', { parse_mode: 'HTML' });
+    await ctx.reply('No device connected', { parse_mode: 'HTML' });
     return;
   }
 
   try {
-    const buffer = await adb.screenshot();
+    const buffer = await driver.screenshot();
     await ctx.replyWithPhoto({ source: buffer, filename: 'screenshot.png' });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    await ctx.reply(`❌ Screenshot failed: <code>${message}</code>`, { parse_mode: 'HTML' });
+    await ctx.reply(`Screenshot failed: <code>${message}</code>`, { parse_mode: 'HTML' });
   }
 });

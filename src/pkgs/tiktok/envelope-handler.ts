@@ -2,7 +2,7 @@ import { type WebcastEnvelopeMessage, EnvelopeDisplay } from 'tiktok-live-connec
 import { EnvelopeEvent } from '@/db/models/index.js';
 import { NotificationService } from '@/services/notification.service.js';
 import { formatEnvelopeNotification, formatEnvelopeReminder } from '@/utils/format.js';
-import { ClaimService } from '@/pkgs/adb/claim.service.js';
+import { ClaimService } from '@/services/claim.service.js';
 import { logger } from '@/utils/logger.js';
 import { env } from '@/config/env.js';
 
@@ -68,7 +68,7 @@ export class EnvelopeHandler {
       this.scheduleReminder(envelopeId, username, diamondCount, unpackAt, messageId);
     }
 
-    // Schedule ADB auto-claim
+    // Schedule auto-claim
     if (unpackAt) {
       this.claimService.scheduleClaim({ envelopeId, username, diamondCount, unpackAt }).catch((err) => {
         logger.error({ err, envelopeId }, 'Failed to schedule claim');

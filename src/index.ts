@@ -5,7 +5,8 @@ import { connectDB, disconnectDB } from '@/db/connection.js';
 import { NotificationService } from '@/services/notification.service.js';
 import { ConnectionManager } from '@/pkgs/tiktok/connection-manager.js';
 import { TikTokService } from '@/services/tiktok.service.js';
-import { ClaimService } from '@/pkgs/adb/claim.service.js';
+import { createDevice } from '@/pkgs/device/index.js';
+import { ClaimService } from '@/services/claim.service.js';
 import { createBot } from '@/bot/index.js';
 
 async function main(): Promise<void> {
@@ -14,8 +15,14 @@ async function main(): Promise<void> {
   // Create a bare Telegraf to get the Telegram API client
   const telegram = new Telegraf(env.BOT_TOKEN).telegram;
 
+  const deviceDriver = createDevice({
+    type: env.DEVICE_TYPE,
+    deviceId: env.DEVICE_ID || undefined,
+    wdaUrl: env.DEVICE_WDA_URL,
+  });
+
   const notifications = new NotificationService(telegram);
-  const claimService = new ClaimService(notifications);
+  const claimService = new ClaimService(notifications, deviceDriver);
   await claimService.initialize();
   const connectionManager = new ConnectionManager(notifications, claimService);
   const tiktokService = new TikTokService(connectionManager);
@@ -25,6 +32,7 @@ async function main(): Promise<void> {
     tiktokService,
     connectionManager,
     claimService,
+    deviceDriver,
   });
 
   connectionManager.start();

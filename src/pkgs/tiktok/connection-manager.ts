@@ -1,7 +1,7 @@
 import { TikTokLiveConnection, WebcastEvent, ControlEvent, type ControlAction } from 'tiktok-live-connector';
 import { WatchedUser } from '@/db/models/index.js';
 import { NotificationService } from '@/services/notification.service.js';
-import { ClaimService } from '@/pkgs/adb/claim.service.js';
+import { ClaimService } from '@/services/claim.service.js';
 import { EnvelopeHandler } from '@/pkgs/tiktok/envelope-handler.js';
 import { logger } from '@/utils/logger.js';
 import { env } from '@/config/env.js';

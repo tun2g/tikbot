@@ -2,7 +2,8 @@ import { Telegraf } from 'telegraf';
 import type { BotContext } from '@/types/index.js';
 import type { TikTokService } from '@/services/tiktok.service.js';
 import type { ConnectionManager } from '@/pkgs/tiktok/connection-manager.js';
-import type { ClaimService } from '@/pkgs/adb/claim.service.js';
+import type { ClaimService } from '@/services/claim.service.js';
+import type { DeviceDriver } from '@/pkgs/device/types.js';
 import { errorMiddleware, requestIdMiddleware, loggerMiddleware, sessionMiddleware } from '@/bot/middleware/index.js';
 import {
   startCommand,
@@ -21,6 +22,7 @@ interface CreateBotOptions {
   tiktokService: TikTokService;
   connectionManager: ConnectionManager;
   claimService: ClaimService;
+  deviceDriver: DeviceDriver;
 }
 
 export function createBot({
@@ -28,6 +30,7 @@ export function createBot({
   tiktokService,
   connectionManager,
   claimService,
+  deviceDriver,
 }: CreateBotOptions): Telegraf<BotContext> {
   const bot = new Telegraf<BotContext>(token);
 
@@ -42,6 +45,7 @@ export function createBot({
     ctx.tiktokService = tiktokService;
     ctx.connectionManager = connectionManager;
     ctx.claimService = claimService;
+    ctx.deviceDriver = deviceDriver;
     return next();
   });
 
@@ -64,7 +68,7 @@ export function createBot({
     { command: 'unwatch', description: 'Stop watching — /unwatch <username>' },
     { command: 'list', description: 'List all watched users' },
     { command: 'status', description: 'Bot health and stats' },
-    { command: 'device', description: 'Show ADB device status' },
+    { command: 'device', description: 'Show device status' },
     { command: 'device_tap', description: 'Test tap at configured coordinates' },
     { command: 'device_screenshot', description: 'Take a screenshot of the device' },
   ]);
