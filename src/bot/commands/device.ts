@@ -1,10 +1,11 @@
 import { Composer } from 'telegraf';
 import type { BotContext } from '@/types/index.js';
 import { env } from '@/config/env.js';
-import { formatDeviceStatus } from '@/utils/format.js';
+import { formatDeviceStatus, formatDeviceError } from '@/utils/format.js';
+import { getAutoClaimLine, NO_DEVICE_TEXT } from '@/bot/utils/index.js';
 
 // ---------------------------------------------------------------------------
-// /device — show device status
+// /device — show device status and configured claim taps
 // ---------------------------------------------------------------------------
 
 export const deviceCommand = new Composer<BotContext>();
@@ -22,31 +23,41 @@ deviceCommand.command('device', async (ctx) => {
     }
   }
 
-  const { DEVICE_ID: deviceId, DEVICE_TAP_X: tapX, DEVICE_TAP_Y: tapY } = env;
-
-  await ctx.reply(formatDeviceStatus(connected, deviceId, currentApp, tapX, tapY), { parse_mode: 'HTML' });
+  await ctx.reply(
+    formatDeviceStatus({
+      autoClaimLine: await getAutoClaimLine(ctx),
+      connected,
+      deviceType: env.DEVICE_TYPE,
+      deviceId: env.DEVICE_ID,
+      currentApp,
+      boxIcon: { x: env.DEVICE_BOX_ICON_X, y: env.DEVICE_BOX_ICON_Y },
+      openButton: { x: env.DEVICE_OPEN_BUTTON_X, y: env.DEVICE_OPEN_BUTTON_Y },
+    }),
+    { parse_mode: 'HTML' },
+  );
 });
 
 // ---------------------------------------------------------------------------
-// /device_tap — send a tap at configured coordinates
+// /device_test — run the two claim taps and send a screenshot
 // ---------------------------------------------------------------------------
 
-export const deviceTapCommand = new Composer<BotContext>();
+const TEST_CAPTION =
+  '🧪 Test run: tapped the treasure box icon, then the "Open" button. Check the screenshot — if the taps missed, adjust DEVICE_BOX_ICON_X/Y and DEVICE_OPEN_BUTTON_X/Y.';
 
-deviceTapCommand.command('device_tap', async (ctx) => {
-  const driver = ctx.deviceDriver;
-  const connected = await driver.isConnected();
-  if (!connected) {
-    await ctx.reply('No device connected', { parse_mode: 'HTML' });
+export const deviceTestCommand = new Composer<BotContext>();
+
+deviceTestCommand.command('device_test', async (ctx) => {
+  if (!(await ctx.deviceDriver.isConnected())) {
+    await ctx.reply(NO_DEVICE_TEXT, { parse_mode: 'HTML' });
     return;
   }
 
   try {
-    await driver.tap(env.DEVICE_TAP_X, env.DEVICE_TAP_Y);
-    await ctx.reply(`Tapped at (<b>${env.DEVICE_TAP_X}</b>, <b>${env.DEVICE_TAP_Y}</b>)`, { parse_mode: 'HTML' });
+    await ctx.sendChatAction('upload_photo');
+    const buffer = await ctx.claimService.runTestSequence();
+    await ctx.replyWithPhoto({ source: buffer, filename: 'test.png' }, { caption: TEST_CAPTION });
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    await ctx.reply(`Tap failed: <code>${message}</code>`, { parse_mode: 'HTML' });
+    await ctx.reply(formatDeviceError('Test run', err), { parse_mode: 'HTML' });
   }
 });
 
@@ -58,9 +69,8 @@ export const deviceScreenshotCommand = new Composer<BotContext>();
 
 deviceScreenshotCommand.command('device_screenshot', async (ctx) => {
   const driver = ctx.deviceDriver;
-  const connected = await driver.isConnected();
-  if (!connected) {
-    await ctx.reply('No device connected', { parse_mode: 'HTML' });
+  if (!(await driver.isConnected())) {
+    await ctx.reply(NO_DEVICE_TEXT, { parse_mode: 'HTML' });
     return;
   }
 
@@ -68,7 +78,6 @@ deviceScreenshotCommand.command('device_screenshot', async (ctx) => {
     const buffer = await driver.screenshot();
     await ctx.replyWithPhoto({ source: buffer, filename: 'screenshot.png' });
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    await ctx.reply(`Screenshot failed: <code>${message}</code>`, { parse_mode: 'HTML' });
+    await ctx.reply(formatDeviceError('Screenshot', err), { parse_mode: 'HTML' });
   }
 });

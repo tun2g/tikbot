@@ -1,7 +1,10 @@
 export { startCommand } from './start.js';
-export { helpCommand } from './help.js';
+export { helpCommand, COMMANDS } from './help.js';
 export { watchCommand } from './watch.js';
 export { unwatchCommand } from './unwatch.js';
 export { listCommand } from './list.js';
 export { statusCommand } from './status.js';
-export { deviceCommand, deviceTapCommand, deviceScreenshotCommand } from './device.js';
+export { pendingCommand } from './pending.js';
+export { historyCommand } from './history.js';
+export { statsCommand } from './stats.js';
+export { deviceCommand, deviceTestCommand, deviceScreenshotCommand } from './device.js';

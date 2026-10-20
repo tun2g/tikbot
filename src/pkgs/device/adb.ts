@@ -20,6 +20,12 @@ export class AdbError extends Error {
   }
 }
 
+/** e.g. "ADB shell input tap failed: error: device unauthorized" — the real cause, not just the command. */
+function failureMessage(args: string[], stderr: string, message?: string): string {
+  const summary = args.slice(0, 3).join(' ');
+  return `ADB ${summary} failed: ${stderr.trim() || message || 'unknown error'}`;
+}
+
 // ---------------------------------------------------------------------------
 // ADB DeviceDriver implementation
 // ---------------------------------------------------------------------------
@@ -45,7 +51,8 @@ export function createAdbDriver(deviceId?: string): DeviceDriver {
       return stdout;
     } catch (err: unknown) {
       const error = err as { stderr?: string; message?: string };
-      throw new AdbError(`ADB command failed: ${cmd}`, cmd, error.stderr ?? error.message ?? 'unknown error');
+      const stderr = error.stderr ?? '';
+      throw new AdbError(failureMessage(args, stderr, error.message), cmd, stderr || error.message || 'unknown error');
     }
   }
 
@@ -123,12 +130,12 @@ export function createAdbDriver(deviceId?: string): DeviceDriver {
       return new Promise<Buffer>((resolve, reject) => {
         execFileCb('adb', args, { encoding: 'buffer', maxBuffer: 10 * 1024 * 1024 }, (error, stdout) => {
           if (error) {
-            const stderr = (error as unknown as { stderr?: Buffer }).stderr;
+            const stderr = (error as unknown as { stderr?: Buffer }).stderr?.toString() ?? '';
             reject(
               new AdbError(
-                `ADB screenshot failed`,
+                failureMessage(['screencap'], stderr, error.message),
                 `adb ${args.join(' ')}`,
-                stderr ? stderr.toString() : error.message,
+                stderr || error.message,
               ),
             );
             return;

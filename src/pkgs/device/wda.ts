@@ -132,9 +132,17 @@ export function createWdaDriver(baseUrl: string = 'http://localhost:8100'): Devi
 
     async currentApp(): Promise<string> {
       logger.debug('wda: getting current app');
-      const res = await request<{ value: { os?: { name?: string }; build?: { bundleid?: string } } }>('GET', '/status');
-
-      const bundleId = res.value?.build?.bundleid ?? 'unknown';
+      // /status reports WDA's own bundle id — activeAppInfo reports the foreground app
+      let bundleId = 'unknown';
+      try {
+        const res = await request<{ value?: { bundleId?: string; name?: string; pid?: number } }>(
+          'GET',
+          '/wda/activeAppInfo',
+        );
+        bundleId = res.value?.bundleId || 'unknown';
+      } catch (err) {
+        logger.debug({ err }, 'wda: activeAppInfo failed');
+      }
       logger.debug({ currentApp: bundleId }, 'wda: current app');
       return bundleId;
     },

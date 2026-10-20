@@ -1,20 +1,21 @@
 import { Composer } from 'telegraf';
 import type { BotContext } from '@/types/index.js';
 import { formatUnwatchConfirmation, formatUserNotFound } from '@/utils/format.js';
+import { commandArg } from '@/bot/utils/index.js';
 
 export const unwatchCommand = new Composer<BotContext>();
 
 unwatchCommand.command('unwatch', async (ctx) => {
-  const username = ctx.message.text.split(/\s+/)[1];
-  if (!username) {
-    await ctx.reply('Usage: /unwatch &lt;username&gt;', { parse_mode: 'HTML' });
+  const input = commandArg(ctx.message.text);
+  if (!input) {
+    await ctx.reply('Usage: /unwatch &lt;username&gt;\nExample: /unwatch khaby.lame', { parse_mode: 'HTML' });
     return;
   }
 
-  const removed = await ctx.tiktokService.removeUser(username);
-  if (removed) {
-    await ctx.reply(formatUnwatchConfirmation(username), { parse_mode: 'HTML' });
+  const res = await ctx.tiktokService.removeUser(input);
+  if (res.removed) {
+    await ctx.reply(formatUnwatchConfirmation(res.username, res.cancelledBoxes), { parse_mode: 'HTML' });
   } else {
-    await ctx.reply(formatUserNotFound(username), { parse_mode: 'HTML' });
+    await ctx.reply(formatUserNotFound(res.username), { parse_mode: 'HTML' });
   }
 });
