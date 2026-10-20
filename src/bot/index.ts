@@ -3,17 +3,29 @@ import type { BotContext } from '@/types/index.js';
 import type { TikTokService } from '@/services/tiktok.service.js';
 import type { ConnectionManager } from '@/pkgs/tiktok/connection-manager.js';
 import type { ClaimService } from '@/services/claim.service.js';
+import type { NotificationService } from '@/services/notification.service.js';
 import type { DeviceDriver } from '@/pkgs/device/types.js';
-import { errorMiddleware, requestIdMiddleware, loggerMiddleware, sessionMiddleware } from '@/bot/middleware/index.js';
+import { logger } from '@/utils/logger.js';
 import {
+  errorMiddleware,
+  accessMiddleware,
+  requestIdMiddleware,
+  loggerMiddleware,
+  sessionMiddleware,
+} from '@/bot/middleware/index.js';
+import {
+  COMMANDS,
   startCommand,
   helpCommand,
   watchCommand,
   unwatchCommand,
   listCommand,
   statusCommand,
+  pendingCommand,
+  historyCommand,
+  statsCommand,
   deviceCommand,
-  deviceTapCommand,
+  deviceTestCommand,
   deviceScreenshotCommand,
 } from '@/bot/commands/index.js';
 
@@ -22,6 +34,7 @@ interface CreateBotOptions {
   tiktokService: TikTokService;
   connectionManager: ConnectionManager;
   claimService: ClaimService;
+  notifications: NotificationService;
   deviceDriver: DeviceDriver;
 }
 
@@ -30,12 +43,14 @@ export function createBot({
   tiktokService,
   connectionManager,
   claimService,
+  notifications,
   deviceDriver,
 }: CreateBotOptions): Telegraf<BotContext> {
   const bot = new Telegraf<BotContext>(token);
 
-  // Middleware pipeline
+  // Middleware pipeline — access control runs before session so strangers never create User rows
   bot.use(errorMiddleware);
+  bot.use(accessMiddleware);
   bot.use(requestIdMiddleware);
   bot.use(loggerMiddleware);
   bot.use(sessionMiddleware);
@@ -45,6 +60,7 @@ export function createBot({
     ctx.tiktokService = tiktokService;
     ctx.connectionManager = connectionManager;
     ctx.claimService = claimService;
+    ctx.notifications = notifications;
     ctx.deviceDriver = deviceDriver;
     return next();
   });
@@ -56,22 +72,22 @@ export function createBot({
   bot.use(unwatchCommand);
   bot.use(listCommand);
   bot.use(statusCommand);
+  bot.use(pendingCommand);
+  bot.use(historyCommand);
+  bot.use(statsCommand);
   bot.use(deviceCommand);
-  bot.use(deviceTapCommand);
+  bot.use(deviceTestCommand);
   bot.use(deviceScreenshotCommand);
 
-  // Register command menu with Telegram
-  bot.telegram.setMyCommands([
-    { command: 'start', description: 'Start the bot' },
-    { command: 'help', description: 'Show available commands' },
-    { command: 'watch', description: 'Watch a TikToker — /watch <username>' },
-    { command: 'unwatch', description: 'Stop watching — /unwatch <username>' },
-    { command: 'list', description: 'List all watched users' },
-    { command: 'status', description: 'Bot health and stats' },
-    { command: 'device', description: 'Show device status' },
-    { command: 'device_tap', description: 'Test tap at configured coordinates' },
-    { command: 'device_screenshot', description: 'Take a screenshot of the device' },
-  ]);
+  // Register command menu with Telegram (same list as /help)
+  bot.telegram
+    .setMyCommands(
+      COMMANDS.flatMap(({ commands }) => commands).map((c) => ({
+        command: c.command,
+        description: c.args ? `${c.description} — /${c.command} ${c.args}` : c.description,
+      })),
+    )
+    .catch((err: unknown) => logger.error({ err }, 'Failed to register bot command menu'));
 
   return bot;
 }

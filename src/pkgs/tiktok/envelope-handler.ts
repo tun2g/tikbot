@@ -1,23 +1,58 @@
 import { type WebcastEnvelopeMessage, EnvelopeDisplay } from 'tiktok-live-connector';
 import { EnvelopeEvent } from '@/db/models/index.js';
 import { NotificationService } from '@/services/notification.service.js';
-import { formatEnvelopeNotification, formatEnvelopeReminder } from '@/utils/format.js';
-import { ClaimService } from '@/services/claim.service.js';
+import { ClaimService, type CancelResult } from '@/services/claim.service.js';
+import {
+  formatEnvelopeNotification,
+  formatEnvelopeReminder,
+  autoClaimLineScheduled,
+  autoClaimLineOff,
+  formatClaimsLost,
+  formatClaimsRestored,
+} from '@/utils/format.js';
 import { logger } from '@/utils/logger.js';
-import { env } from '@/config/env.js';
+import { env, autoClaim } from '@/config/env.js';
 
-interface PendingReminder {
-  timer: ReturnType<typeof setTimeout>;
-  messageId: number;
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+interface Box {
+  envelopeId: string;
+  username: string;
+  diamondCount: number;
+  unpackAt: Date;
+  alertMessageId?: number;
+  /** Auto-claim was promised in the alert. */
+  autoClaim: boolean;
 }
 
+interface TrackedBox {
+  username: string;
+  reminderTimer?: ReturnType<typeof setTimeout>;
+  /** Boxes without a scheduled claim: marks the box 'untracked' when it opens. */
+  openTimer?: ReturnType<typeof setTimeout>;
+}
+
+const USER_REMOVED_NOTE = 'Streamer was removed from the watch list';
+
+const isDuplicateKeyError = (err: unknown): boolean => (err as { code?: number })?.code === 11000;
+
+// ---------------------------------------------------------------------------
+// Handler
+// ---------------------------------------------------------------------------
+
 export class EnvelopeHandler {
-  private readonly pendingReminders = new Map<string, PendingReminder>();
+  private readonly tracked = new Map<string, TrackedBox>();
 
   constructor(
     private readonly notifications: NotificationService,
     private readonly claimService: ClaimService,
   ) {}
+
+  // -------------------------------------------------------------------------
+  // New boxes
+  // -------------------------------------------------------------------------
 
   async handle(username: string, data: WebcastEnvelopeMessage): Promise<void> {
     if (data.display !== EnvelopeDisplay.ENVELOPE_DISPLAY_NEW) return;
@@ -32,94 +67,250 @@ export class EnvelopeHandler {
     const sendUserId = info.sendUserId ?? '';
     const businessType = info.businessType ?? 0;
     const unpackAt = info.unpackAt ? new Date(info.unpackAt * 1000) : undefined;
-    const opensInSeconds = unpackAt ? Math.max(0, Math.round((unpackAt.getTime() - Date.now()) / 1000)) : undefined;
+
+    // Deduplicate by envelopeId — TikTok re-sends the same box (e.g. after a reconnect)
+    try {
+      const result = await EnvelopeEvent.updateOne(
+        { envelopeId },
+        {
+          $setOnInsert: {
+            envelopeId,
+            username,
+            businessType,
+            sendUserName,
+            sendUserId,
+            diamondCount,
+            peopleCount,
+            unpackAt,
+            timestamp: new Date(),
+          },
+        },
+        { upsert: true },
+      );
+      if (result.upsertedCount === 0) {
+        logger.debug({ username, envelopeId }, 'Treasure box already known, skipping');
+        return;
+      }
+    } catch (err) {
+      if (isDuplicateKeyError(err)) return; // concurrent insert of the same box
+      throw err;
+    }
 
     logger.info(
-      { username, envelopeId, diamondCount, peopleCount, sendUserName, businessType, unpackAt, opensInSeconds },
+      { username, envelopeId, diamondCount, peopleCount, sendUserName, businessType, unpackAt },
       'Treasure box appeared',
     );
 
-    // Deduplicate by envelopeId
+    const willClaim = autoClaim.enabled && !!unpackAt;
+    const autoClaimLine = willClaim
+      ? autoClaimLineScheduled
+      : !unpackAt
+        ? autoClaimLineOff('TikTok gave no open time')
+        : autoClaimLineOff(autoClaim.disabledReason!);
+
+    const alertMessageId = await this.notifications.send(
+      formatEnvelopeNotification({
+        streamer: username,
+        diamondCount,
+        peopleCount,
+        sendUserName,
+        unpackAt,
+        autoClaimLine,
+      }),
+    );
+
     await EnvelopeEvent.updateOne(
       { envelopeId },
       {
-        $setOnInsert: {
-          envelopeId,
-          username,
-          businessType,
-          sendUserName,
-          sendUserId,
-          diamondCount,
-          peopleCount,
-          unpackAt,
-          timestamp: new Date(),
+        $set: {
+          alertMessageId,
+          autoClaim: willClaim,
+          ...(!unpackAt && { claimStatus: 'untracked', claimNote: 'TikTok gave no open time' }),
         },
       },
-      { upsert: true },
     );
 
-    // Send realtime notification (includes remaining time)
-    const messageId = await this.notifications.send(
-      formatEnvelopeNotification(username, diamondCount, peopleCount, sendUserName, businessType, opensInSeconds),
-    );
-
-    // Schedule reminder that replies to the original message
-    if (unpackAt && messageId) {
-      this.scheduleReminder(envelopeId, username, diamondCount, unpackAt, messageId);
-    }
-
-    // Schedule auto-claim
     if (unpackAt) {
-      this.claimService.scheduleClaim({ envelopeId, username, diamondCount, unpackAt }).catch((err) => {
-        logger.error({ err, envelopeId }, 'Failed to schedule claim');
-      });
+      this.track(
+        { envelopeId, username, diamondCount, unpackAt, alertMessageId, autoClaim: willClaim },
+        { remindLate: true },
+      );
     }
   }
 
-  private scheduleReminder(
-    envelopeId: string,
-    username: string,
-    diamondCount: number,
-    unpackAt: Date,
-    messageId: number,
-  ): void {
-    const existing = this.pendingReminders.get(envelopeId);
-    if (existing) clearTimeout(existing.timer);
+  // -------------------------------------------------------------------------
+  // Restart recovery
+  // -------------------------------------------------------------------------
 
-    const alertBeforeMs = env.TREASURE_BOX_ALERT_BEFORE_MS;
-    const alertBeforeSeconds = Math.round(alertBeforeMs / 1000);
-    const delay = unpackAt.getTime() - alertBeforeMs - Date.now();
+  /** Re-schedule boxes that were 'tracking' when the bot stopped, and report the ones that were missed. */
+  async restore(): Promise<void> {
+    const events = await EnvelopeEvent.find({ claimStatus: 'tracking' }).sort({ unpackAt: 1 }).lean();
+    if (events.length === 0) return;
 
-    if (delay <= 0) {
-      const secondsLeft = Math.max(0, Math.round((unpackAt.getTime() - Date.now()) / 1000));
-      this.notifications.reply(messageId, formatEnvelopeReminder(username, secondsLeft, diamondCount)).catch((err) => {
-        logger.error({ err, envelopeId }, 'Failed to send envelope reminder');
-      });
-      return;
+    const now = Date.now();
+    const lost: Array<{ envelopeId: string; username: string; unpackAt: Date | null | undefined }> = [];
+    const untracked: string[] = [];
+    let restoredAny = false;
+    let restoredClaims = 0;
+
+    for (const e of events) {
+      if (!e.unpackAt || e.unpackAt.getTime() <= now) {
+        if (e.autoClaim) lost.push({ envelopeId: e.envelopeId, username: e.username, unpackAt: e.unpackAt });
+        else untracked.push(e.envelopeId);
+        continue;
+      }
+
+      const result = this.track(
+        {
+          envelopeId: e.envelopeId,
+          username: e.username,
+          diamondCount: e.diamondCount,
+          unpackAt: e.unpackAt,
+          alertMessageId: e.alertMessageId ?? undefined,
+          autoClaim: e.autoClaim ?? false,
+        },
+        { remindLate: false },
+      );
+      restoredAny = true;
+      if (result.claimScheduled) restoredClaims++;
     }
 
+    if (untracked.length > 0) {
+      await EnvelopeEvent.updateMany({ envelopeId: { $in: untracked } }, { $set: { claimStatus: 'untracked' } });
+    }
+
+    if (lost.length > 0) {
+      await EnvelopeEvent.updateMany(
+        { envelopeId: { $in: lost.map((b) => b.envelopeId) } },
+        { $set: { claimStatus: 'lost', claimNote: 'Bot was not running when the box opened' } },
+      );
+      await this.notifications.send(formatClaimsLost(lost));
+    }
+
+    if (restoredAny) await this.notifications.send(formatClaimsRestored(restoredClaims));
+
     logger.info(
-      { envelopeId, username, delaySeconds: Math.round(delay / 1000), alertBeforeSeconds },
-      'Scheduled treasure box reminder',
+      { restored: restoredAny, restoredClaims, lost: lost.length, untracked: untracked.length },
+      'Restored tracked treasure boxes',
+    );
+  }
+
+  // -------------------------------------------------------------------------
+  // Cancel
+  // -------------------------------------------------------------------------
+
+  async cancelEnvelope(envelopeId: string): Promise<CancelResult> {
+    const claim = this.claimService.cancel(envelopeId);
+    if (claim === 'already-running') return 'already-running';
+
+    const inMemory = this.untrack(envelopeId) || claim === 'cancelled';
+
+    const result = await EnvelopeEvent.updateOne(
+      { envelopeId, claimStatus: 'tracking', ...(!inMemory && { unpackAt: { $gt: new Date() } }) },
+      { $set: { claimStatus: 'cancelled', claimNote: 'Cancelled from /pending' } },
     );
 
-    const timer = setTimeout(() => {
-      this.pendingReminders.delete(envelopeId);
-      this.notifications
-        .reply(messageId, formatEnvelopeReminder(username, alertBeforeSeconds, diamondCount))
-        .catch((err) => {
-          logger.error({ err, envelopeId }, 'Failed to send envelope reminder');
-        });
-    }, delay);
+    if (!inMemory && result.modifiedCount === 0) return 'not-found';
+    logger.info({ envelopeId }, 'Treasure box cancelled');
+    return 'cancelled';
+  }
 
-    this.pendingReminders.set(envelopeId, { timer, messageId });
+  /** Cancel every upcoming box (reminder + claim) of a streamer. Returns how many boxes were cancelled. */
+  async cancelUser(username: string): Promise<number> {
+    const ids = new Set(this.claimService.cancelUser(username));
+    for (const [envelopeId, box] of [...this.tracked]) {
+      if (box.username !== username || envelopeId === this.claimService.runningEnvelopeId) continue;
+      this.untrack(envelopeId);
+      ids.add(envelopeId);
+    }
+
+    const runningId = this.claimService.runningEnvelopeId;
+    const result = await EnvelopeEvent.updateMany(
+      {
+        username,
+        claimStatus: 'tracking',
+        ...(runningId && { envelopeId: { $ne: runningId } }),
+        $or: [{ unpackAt: { $gt: new Date() } }, { envelopeId: { $in: [...ids] } }],
+      },
+      { $set: { claimStatus: 'cancelled', claimNote: USER_REMOVED_NOTE } },
+    );
+
+    logger.info({ username, count: result.modifiedCount }, 'Cancelled upcoming boxes for user');
+    return result.modifiedCount;
   }
 
   clearTimers(): void {
-    for (const { timer } of this.pendingReminders.values()) {
-      clearTimeout(timer);
-    }
-    this.pendingReminders.clear();
+    for (const envelopeId of [...this.tracked.keys()]) this.untrack(envelopeId);
     this.claimService.clearAll();
+  }
+
+  // -------------------------------------------------------------------------
+  // Private
+  // -------------------------------------------------------------------------
+
+  /**
+   * Schedule the reminder and (if promised and enabled) the claim for a box.
+   * remindLate: send the reminder right away if its moment already passed but the box isn't open yet.
+   */
+  private track(box: Box, opts: { remindLate: boolean }): { claimScheduled: boolean } {
+    const { envelopeId, username, diamondCount, unpackAt, alertMessageId } = box;
+    this.untrack(envelopeId);
+
+    const entry: TrackedBox = { username };
+    const now = Date.now();
+    const reminderDelay = unpackAt.getTime() - env.TREASURE_BOX_ALERT_BEFORE_MS - now;
+
+    const sendReminder = () => {
+      entry.reminderTimer = undefined;
+      this.cleanupIfDone(envelopeId, entry);
+      this.notifications.send(formatEnvelopeReminder(username, unpackAt, diamondCount), alertMessageId).catch((err) => {
+        logger.error({ err, envelopeId }, 'Failed to send envelope reminder');
+      });
+    };
+
+    if (reminderDelay > 0) {
+      entry.reminderTimer = setTimeout(sendReminder, reminderDelay);
+      logger.info({ envelopeId, username, delaySeconds: Math.round(reminderDelay / 1000) }, 'Scheduled box reminder');
+    } else if (opts.remindLate && unpackAt.getTime() > now) {
+      sendReminder();
+    }
+
+    const claimScheduled =
+      box.autoClaim &&
+      this.claimService.scheduleClaim({ envelopeId, username, diamondCount, unpackAt, alertMessageId });
+
+    if (!claimScheduled) {
+      const note = box.autoClaim ? 'Auto-claim was turned off before the box opened' : '';
+      entry.openTimer = setTimeout(
+        () => {
+          entry.openTimer = undefined;
+          this.cleanupIfDone(envelopeId, entry);
+          EnvelopeEvent.updateOne(
+            { envelopeId, claimStatus: 'tracking' },
+            { $set: { claimStatus: 'untracked', ...(note && { claimNote: note }) } },
+          ).catch((err) => logger.error({ err, envelopeId }, 'Failed to mark box untracked'));
+        },
+        Math.max(0, unpackAt.getTime() - now),
+      );
+    }
+
+    if (entry.reminderTimer || entry.openTimer) this.tracked.set(envelopeId, entry);
+    return { claimScheduled };
+  }
+
+  private cleanupIfDone(envelopeId: string, entry: TrackedBox): void {
+    if (!entry.reminderTimer && !entry.openTimer && this.tracked.get(envelopeId) === entry) {
+      this.tracked.delete(envelopeId);
+    }
+  }
+
+  /** Clear in-memory timers for a box. Returns true if anything was scheduled. */
+  private untrack(envelopeId: string): boolean {
+    const entry = this.tracked.get(envelopeId);
+    if (!entry) return false;
+    if (entry.reminderTimer) clearTimeout(entry.reminderTimer);
+    if (entry.openTimer) clearTimeout(entry.openTimer);
+    this.tracked.delete(envelopeId);
+    return true;
   }
 }
